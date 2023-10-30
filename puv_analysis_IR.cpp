@@ -1,31 +1,52 @@
+// Print the values of gen, kill, in, out sets
+void print_sets(std::vector<llvm::StringRef> g_vars, std::vector<long long> gen, std::vector<long long> kill, std::vector<long long> in, std::vector<long long> out) {
+    int total_basic_blocks = gen.size();
+    llvm::outs() << "\nBlock\tGen\t\t\tKill\t\t\tIn\t\t\tOut\n";
+    for (int i = 0; i < total_basic_blocks; i++) {
+        llvm::outs() << i << "\t";
+        for (int j = 0; j < g_vars.size(); j++) {
+            if ((1 << j)&gen[i]) llvm::outs() << g_vars[j] << ",";
+        }
+        llvm::outs() << "\t\t\t";
+        for (int j = 0; j < g_vars.size(); j++) {
+            if ((1 << j)&kill[i]) llvm::outs() << g_vars[j] << ",";
+        }
+        llvm::outs() << "\t\t\t";
+        for (int j = 0; j < g_vars.size(); j++) {
+            if ((1 << j)&in[i]) llvm::outs() << g_vars[j] << ",";
+        }
+        llvm::outs() << "\t\t\t";
+        for (int j = 0; j < g_vars.size(); j++) {
+            if ((1 << j)&out[i]) llvm::outs() << g_vars[j] << ",";
+        }
+        llvm::outs() << "\n";
+    }
+}
+
+// Return the digit corresponding to the given variable as set bit
+long long get_digit(llvm::StringRef s, std::map<llvm::StringRef, int> var) {
+    long long ret_val = 0;
+    if (var[s]) ret_val = (1 << (var[s] - 1));
+    return ret_val;
+}
+
 // Dump the IR
 void slim::IR::dumpIR()
 {
     // Keeps track whether the function details have been printed or not
     std::unordered_map<llvm::Function *, bool> func_visited;
-    // To retrieve the type of instruction
-    std::string ins_type[46] = { "Allocation", "Assignment statement: Load", "Assignment statement: Store", "Fence", "Atomic compare and change", "Atomic modify memory", "Get element pointer", "Floating-point negation", "Binary operation", "Extract element", "Insert element", "Shuffle vector", "Extract value", "Insert value", "Truncate", "Zext", "Sext", "FP Ext", "FP to Int", "Int to FP", "Ptr to Int", "Int to ptr", "Bitcast", "Address Space", "Compare", "Phi", "Select", "Freeze", "Call", "Variable argument", "Landing Pad", "Catch pad", "Cleanup pad", "Return", "Branch", "Switch", "Indirect Branch", "Invoke", "Callbr", "Resume", "Catch Switch", "Catch Return", "Cleanup Return", "Unreachable", "Other", "Not assigned"};
-    // To retrieve the type of operator
-    std::string op_type[] = { "+", "-", "*", "/", "%", "<<", ">>>", ">>", "&", "|", "^"};
     std::vector<llvm::StringRef> g_vars;    // stores all global variables
     std::map<llvm::StringRef, int> var;     // maps the variable with it's digit (from RHS) in the binary representation
 
-    // Iterate over the function basic block map
-
+    // Iterate over the function basic block map and extract all global variables
     for (auto &entry : this->func_bb_to_inst_id)
     {
         llvm::Function *func = entry.first.first;
         llvm::BasicBlock *basic_block = entry.first.second;
 
-        // Check if the function details are already printed and if not, print the details and mark the function as visited
+        // Check if the function is visited else mark the function as visited
         if (func_visited.find(func) == func_visited.end())
         {
-            if (func->getSubprogram())
-                llvm::outs() << "[" << func->getSubprogram()->getFilename() << "] ";
-
-            llvm::outs() << "Function: " << func->getName() << "\n";
-            llvm::outs() << "-------------------------------------" << "\n";
-
             // Mark the function as visited
             func_visited[func] = true;
         }
@@ -68,29 +89,9 @@ void slim::IR::dumpIR()
     while (!converged) {
         // Terminating condition
         if (in == prev_in) {
-            // Print final in out values
+            // Print final In/Out values
             llvm::outs() << "\nFinal values:";
-            llvm::outs() << "\nBlock\tGen\t\t\tKill\t\t\tIn\t\t\tOut\n";
-            for (int i = 0; i < total_basic_blocks; i++) {
-                llvm::outs() << i << "\t";
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&gen[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\t\t\t";
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&kill[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\t\t\t";
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&in[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\t\t\t";
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&out[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\n";
-            }
-
+            print_sets(g_vars, gen, kill, in, out);
             converged = true;
         } else {
             prev_in = in;       // set In information as previous In information
@@ -118,8 +119,6 @@ void slim::IR::dumpIR()
                 {
                     BaseInstruction *instruction = inst_id_to_object[instruction_id];
 
-                    unsigned ops = instruction->getNumOperands();
-
                     // If it is a load instruction, map the name of RHS operand to the LHS one
                     if (instruction->getInstructionType() == InstructionType::LOAD) {
                         llvm::StringRef left_side = instruction->getLHS().first->getName();
@@ -128,55 +127,44 @@ void slim::IR::dumpIR()
                     }
 
                     // If it is a call instruction and the function is read(), the variable is killed
+                    // Here we would require values from load_val map
                     if (instruction->getInstructionType() == InstructionType::CALL) {
                         CallInstruction *c = (CallInstruction *) instruction;
                         llvm::StringRef f_name = c->getCalleeFunction()->getName();
                         if (f_name.str() == "read") {
                             llvm::StringRef x = c->getOperand(0).first->getName();
                             llvm::StringRef y = load_val[x];
-                            kill[curr] |= (1 << (var[y] - 1));
+                            kill[curr] |= get_digit(y, var);
                         }
                     }
 
                     bool lhs_killed = true;         // LHS variable will be killed by default
                     SLIMOperand *lhs_op = instruction->getLHS().first;
-                    if (lhs_op != nullptr) {
+                    unsigned ops = instruction->getNumOperands();
+                    if (lhs_op != nullptr && ops > 0) {
                         llvm::StringRef lhs = lhs_op->getName();
-                        if (ops > 0) {
-                            // Check if operands are possibly uninitialised (in the In set of current block)
-                            for (unsigned i = 0; i < ops; i++) {
-                                SLIMOperand *x = instruction->getOperand(i).first;
-                                // if the operand is a constant it will not have a name
-                                if (x->hasName()) {
-                                    llvm::StringRef op_name = x->getName();
-                                    if (var[op_name]) {                     // present in variable set
-                                        long long pos = (1 << (var[op_name] - 1));
-                                        if (pos & in[curr]) {               // variable is possibly uninitialised
-                                            lhs_killed = false;
-                                            if (var[lhs]) {
-                                                long long lhs_pos = (1 << (var[lhs] - 1));
-                                                gen[curr] |= lhs_pos;
-                                            }
-                                            else intermediate[lhs]++;
-                                        }
+
+                        // Check if operands are possibly uninitialised (in the In set of current block)
+                        for (unsigned i = 0; i < ops; i++) {
+                            SLIMOperand *x = instruction->getOperand(i).first;
+                            if (x->hasName()) {                         // if the operand is a constant it will not have a name
+                                llvm::StringRef op_name = x->getName();
+
+                                // if either operand is in var set and also in In set or it is an intermediate unitialised variable, LHS will be put in Gen set
+                                if ((get_digit(op_name, var)&in[curr]) || intermediate[op_name]) {
+                                    lhs_killed = false;
+                                    if (var[lhs]) {
+                                        gen[curr] |= get_digit(lhs, var);
                                     }
-                                    else if (intermediate[op_name]) {       // intermediate variable is possibly uninitialised
-                                        lhs_killed = false;
-                                        if (var[lhs]) {
-                                            long long lhs_pos = (1 << (var[lhs] - 1));
-                                            gen[curr] |= lhs_pos;
-                                        }
-                                        else intermediate[lhs]++;
-                                    }
+                                    else intermediate[lhs]++;
                                 }
                             }
                         }
 
                         // If we did not find any uninitialised variable in the RHS, we kill the LHS variable
                         if (var[lhs] && lhs_killed) {
-                            kill[curr] |= (1 << (var[lhs] - 1));
+                            kill[curr] |= get_digit(lhs, var);
                         }
-
                     }
                 }
 
@@ -186,27 +174,7 @@ void slim::IR::dumpIR()
 
             // Print current values of in, out, kill, gen
             llvm::outs() << "\nIteration " << iteration << '\n';
-            llvm::outs() << "Block\tGen\t\t\tKill\t\t\tIn\t\t\tOut\n";
-            for (int i = 0; i < total_basic_blocks; i++) {
-                llvm::outs() << i << "\t";
-                // << gen[i] << '\t' << kill[i] << '\t' << in[i] << '\t' << out[i] << '\n';
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&gen[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\t\t\t";
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&kill[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\t\t\t";
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&in[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\t\t\t";
-                for (int j = 0; j < g_vars.size(); j++) {
-                    if ((1 << j)&out[i]) llvm::outs() << g_vars[j] << ",";
-                }
-                llvm::outs() << "\n";
-            }
+            print_sets(g_vars, gen, kill, in, out);
             iteration++;
         }
     }
